@@ -1,8 +1,14 @@
 package e2e_encryption
 
 import (
+	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"encoding/base64"
 	"fmt"
+	"github.com/coreos/etcd/clientv3"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -15,7 +21,80 @@ import (
 	"github.com/openshift/library-go/test/library/encryption"
 )
 
+func TestDecryptEtcdData(t *testing.T) {
+	e := encryption.NewE(t)
+	cs := encryption.GetClients(e)
+
+	timeout, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+
+	// data
+	encryptionKey64 := "Kt5ZWKBr0Nt7A0AIkTgwSGcsx4ShTYCqT81jeJZeMlU="                         // base64 encoded key taken from the encryption cfg in openshift-config-managed ns
+	encryptionKeyID := "11"                                                                   // the name of the key taken from the encryption cfg in openshift-config-managed ns
+	encryptionPrefix := "k8s:enc:aescbc:v1:"                                                  // encryption prefix that will be removed from encrypted data
+	etcdKey := "/openshift.io/oauth/accesstokens/9N0JLFrw0Z9jqT8khAUZb2LyfQVObraaOoBdcX1rL7A" // a resource that will be retrieved from etcd
+
+	// read the resource from etcd
+	resp, err := cs.Etcd.Get(timeout, etcdKey, clientv3.WithPrefix())
+	require.NoError(t, err)
+
+	if len(resp.Kvs) != 1 {
+		t.Fatalf("unexpected number of keys retruned from etcd, expected exactly one got %d", len(resp.Kvs))
+	}
+
+	// decode
+	plain, err := decode(t, encryptionPrefix, encryptionKey64, encryptionKeyID, resp.Kvs[0].Value)
+	require.NoError(t, err)
+	fmt.Printf("decrypted data %s", plain)
+}
+
+func decode(t testing.TB, encryptionPrefix string, key64 string, keyID string, data []byte) ([]byte, error) {
+	key, err := base64.StdEncoding.DecodeString(key64)
+	require.NoError(t, err)
+
+	block, err := aes.NewCipher(key)
+	require.NoError(t, err)
+
+	prefixLen := len(encryptionPrefix) + len([]byte(keyID+":"))
+	plainText, _, err := decryptAes(data[prefixLen:], block)
+	return plainText, err
+}
+
+func decryptAes(data []byte, block cipher.Block) ([]byte, bool, error) {
+	blockSize := aes.BlockSize
+	if len(data) < blockSize {
+		return nil, false, fmt.Errorf("the stored data was shorter than the required size")
+	}
+	iv := data[:blockSize]
+	data = data[blockSize:]
+
+	if len(data)%blockSize != 0 {
+		return nil, false, fmt.Errorf("errInvalidBlockSize")
+	}
+
+	result := make([]byte, len(data))
+	copy(result, data)
+	mode := cipher.NewCBCDecrypter(block, iv)
+	mode.CryptBlocks(result, result)
+
+	// remove and verify PKCS#7 padding for CBC
+	c := result[len(result)-1]
+	paddingSize := int(c)
+	size := len(result) - paddingSize
+	if paddingSize == 0 || paddingSize > len(result) {
+		return nil, false, fmt.Errorf("errInvalidPKCS7Data")
+	}
+	for i := 0; i < paddingSize; i++ {
+		if result[size+i] != c {
+			return nil, false, fmt.Errorf("errInvalidPKCS7Padding")
+		}
+	}
+
+	return result[:size], false, nil
+}
+
 func TestEncryptionTypeIdentity(t *testing.T) {
+	t.SkipNow()
 	e := encryption.NewE(t)
 	ns := operatorclient.GlobalMachineSpecifiedConfigNamespace
 	labelSelector := "encryption.apiserver.operator.openshift.io/component" + "=" + operatorclient.TargetNamespace
@@ -24,6 +103,7 @@ func TestEncryptionTypeIdentity(t *testing.T) {
 }
 
 func TestEncryptionTypeUnset(t *testing.T) {
+	t.SkipNow()
 	e := encryption.NewE(t)
 	ns := operatorclient.GlobalMachineSpecifiedConfigNamespace
 	labelSelector := "encryption.apiserver.operator.openshift.io/component" + "=" + operatorclient.TargetNamespace
@@ -32,6 +112,7 @@ func TestEncryptionTypeUnset(t *testing.T) {
 }
 
 func TestEncryptionTurnOnAndOff(t *testing.T) {
+	t.SkipNow()
 	scenarios := []struct {
 		name     string
 		testFunc func(*testing.T)
@@ -75,6 +156,7 @@ func TestEncryptionTurnOnAndOff(t *testing.T) {
 // TestEncryptionRotation first encrypts data with aescbc key
 // then it forces a key rotation by setting the "encyrption.Reason" in the operator's configuration file
 func TestEncryptionRotation(t *testing.T) {
+	t.SkipNow()
 	// TODO: dump events, conditions in case of an failure for all scenarios
 
 	// test data
